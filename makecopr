@@ -1,0 +1,51 @@
+#!/bin/bash
+set -e
+export LC_TIME=C
+
+DATE=$(date '+%a %b %d %Y')
+
+echo "Nightly keepassxc build started for $DATE"
+
+ROOT=$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )
+TOPDIR=$ROOT/build
+export GIT_DIR=$TOPDIR/SOURCES/keepassxc.git
+
+cd $ROOT
+
+if [ ! -e $GIT_DIR ]; then
+    git clone --mirror https://github.com/keepassxreboot/keepassxc.git $GIT_DIR
+fi
+
+git remote update
+
+TAG=$(git describe --long develop)
+VERSION=$(echo $TAG | cut -f1 -d-)
+REVISION=$(echo $TAG | cut -f2 -d-)
+COMMIT=$(echo $TAG | cut -f3 -d-)
+
+export SRPM_PATH=$TOPDIR/SRPMS/keepassxc-nightly-$VERSION-0.$REVISION.$COMMIT.src.rpm
+
+[ -e $SRPM_PATH ] && exit 0
+
+mkdir -p $TOPDIR/SOURCES/
+ARCHIVE=$TOPDIR/SOURCES/keepassxc-$TAG.tar.gz
+
+[ -e $ARCHIVE ] || git archive -o $ARCHIVE --prefix=keepassxc-$TAG/ develop
+
+if [ ! -e $SRPM_PATH ]; then
+    sed -e "s/__VERSION__/$VERSION/g" \
+        -e "s/__REVISION__/$REVISION/g" \
+        -e "s/__COMMIT__/$COMMIT/g" \
+        -e "s/__DATE__/$DATE/g" \
+        keepassxc.spec.in > $TOPDIR/SOURCES/keepassxc-nightly.spec
+
+    rpmbuild --undefine dist -D"_topdir $TOPDIR" -bs $TOPDIR/SOURCES/keepassxc-nightly.spec
+fi
+
+[ -e $SRPM_PATH ] || exit 1
+
+source copr-config.sh
+
+curl -u "$login:$token" -F 'metadata={"project_id":'$project_id',"chroots":'$chroots',"enable_net":false}' -F "srpm=@$SRPM_PATH" $copr_url/api_2/builds
+
+echo "Nightly keepassxc build ended for $DATE"
